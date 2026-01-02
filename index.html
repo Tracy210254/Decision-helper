@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Decision Fatigue Helper - Let AI handle your daily decisions">
+    <meta name="theme-color" content="#9333ea">
+    <title>Decision Fatigue Helper</title>
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" type="image/png" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+        }
+        .animate-fade-in {
+            animation: fadeIn 0.3s ease-in;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-purple-50 to-blue-50">
+    <div id="app"></div>
+
+    <script>
+        // Register Service Worker
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('service-worker.js')
+                    .then(reg => console.log('Service Worker registered'))
+                    .catch(err => console.log('Service Worker registration failed'));
+            });
+        }
+
+        // App State Management
+        const APP_STATE_KEY = 'decisionFatigueHelper_state';
+
+        class DecisionFatigueHelper {
+            constructor() {
+                this.state = this.loadState();
+                this.currentDecision = null;
+                this.showStats = false;
+                this.mode = 'auto';
+                this.init();
+            }
+
+            loadState() {
+                const saved = localStorage.getItem(APP_STATE_KEY);
+                if (saved) {
+                    return JSON.parse(saved);
+                }
+                return [
+                    {
+                        id: 'meal',
+                        category: 'What to Eat',
+                        icon: '🍽️',
+                        options: ['Italian Pasta', 'Thai Curry', 'Mexican Tacos', 'Healthy Salad', 'Burger & Fries', 'Sushi', 'Chinese Food', 'Pizza', 'Sandwich'],
+                        preferences: {},
+                        history: []
+                    },
+                    {
+                        id: 'outfit',
+                        category: 'What to Wear',
+                        icon: '👔',
+                        options: ['Casual Jeans & T-shirt', 'Business Casual', 'Sporty Athleisure', 'Dressy Outfit', 'Comfy Loungewear', 'Smart Casual'],
+                        preferences: {},
+                        history: []
+                    },
+                    {
+                        id: 'exercise',
+                        category: 'Exercise Today',
+                        icon: '💪',
+                        options: ['30min Run', 'Yoga Session', 'Gym Workout', 'Swimming', 'Rest Day', 'Quick Walk', 'Cycling', 'Home Workout'],
+                        preferences: {},
+                        history: []
+                    },
+                    {
+                        id: 'entertainment',
+                        category: 'What to Watch',
+                        icon: '🎬',
+                        options: ['Action Movie', 'Comedy Series', 'Documentary', 'Drama Film', 'Sci-Fi Show', 'Reality TV', 'Thriller', 'Animated'],
+                        preferences: {},
+                        history: []
+                    }
+                ];
+            }
+
+            saveState() {
+                localStorage.setItem(APP_STATE_KEY, JSON.stringify(this.state));
+            }
+
+            getSmartSuggestion(decision) {
+                const { options, preferences, history } = decision;
+                const recentChoices = history.slice(-3).map(h => h.choice);
+                const availableOptions = options.filter(opt => !recentChoices.includes(opt));
+                
+                if (availableOptions.length === 0) return options[Math.floor(Math.random() * options.length)];
+
+                if (Object.keys(preferences).length > 0) {
+                    const weights = availableOptions.map(opt => Math.max(preferences[opt] || 1, 0.5));
+                    const totalWeight = weights.reduce((a, b) => a + b, 0);
+                    let random = Math.random() * totalWeight;
+                    
+                    for (let i = 0; i < availableOptions.length; i++) {
+                        random -= weights[i];
+                        if (random <= 0) return availableOptions[i];
+                    }
+                }
+                
+                return availableOptions[Math.floor(Math.random() * availableOptions.length)];
+            }
+
+            getReasoning(decision, choice) {
+                const { history, preferences } = decision;
+                const reasons = [];
+                
+                const recentChoices = history.slice(-3).map(h => h.choice);
+                if (!recentChoices.includes(choice)) {
+                    const previousChoices = history.filter(h => h.choice === choice);
+                    if (previousChoices.length === 0) {
+                        reasons.push("You haven't tried this yet");
+                    } else {
+                        reasons.push("You haven't chosen this recently");
+                    }
+                }
+                
+                if (preferences[choice] && preferences[choice] > 6) {
+                    reasons.push("It's one of your favorites");
+                } else if (preferences[choice] && preferences[choice] < 4) {
+                    reasons.push("Time to give it another chance");
+                }
+                
+                reasons.push("Good variety for today");
+                return reasons.join(", ");
+            }
+
+            makeDecision(decisionId) {
+                const decision = this.state.find(d => d.id === decisionId);
+                const suggestion = this.getSmartSuggestion(decision);
+                const reasoning = this.getReasoning(decision, suggestion);
+                
+                this.currentDecision = {
+                    ...decision,
+                    suggestion,
+                    reasoning,
+                    timestamp: new Date().toISOString()
+                };
+                this.render();
+            }
+
+            provideFeedback(liked) {
+                if (!this.currentDecision) return;
+                
+                this.state = this.state.map(d => {
+                    if (d.id === this.currentDecision.id) {
+                        const newPreferences = { ...d.preferences };
+                        const choice = this.currentDecision.suggestion;
+                        
+                        newPreferences[choice] = (newPreferences[choice] || 5) + (liked ? 1 : -1);
+                        
+                        const newHistory = [...d.history, {
+                            choice,
+                            liked,
+                            timestamp: this.currentDecision.timestamp
+                        }];
+                        
+                        return { ...d, preferences: newPreferences, history: newHistory };
+                    }
+                    return d;
+                });
+                
+                this.saveState();
+                this.currentDecision = null;
+                this.render();
+            }
+
+            getStats(decision) {
+                const total = decision.history.length;
+                const liked = decision.history.filter(h => h.liked).length;
+                return { 
+                    total, 
+                    liked, 
+                    satisfaction: total > 0 ? Math.round((liked / total) * 100) : 0 
+                };
+            }
+
+            render() {
+                const app = document.getElementById('app');
+                app.innerHTML = `
+                    <div class="min-h-screen p-6">
+                        <div class="max-w-4xl mx-auto">
+                            ${this.renderHeader()}
+                            ${this.renderModeSelector()}
+                            ${this.showStats ? this.renderStats() : ''}
+                            ${this.currentDecision ? this.renderCurrentDecision() : this.renderCategories()}
+                            ${this.renderFooter()}
+                        </div>
+                    </div>
+                `;
+                this.attachEventListeners();
+            }
+
+            renderHeader() {
+                return `
+                    <div class="text-center mb-8">
+                        <div class="flex items-center justify-center gap-2 mb-2">
+                            <span class="text-4xl">✨</span>
+                            <h1 class="text-4xl font-bold text-gray-800">Decision Fatigue Helper</h1>
+                        </div>
+                        <p class="text-gray-600">Let me handle the small stuff so you can focus on what matters</p>
+                    </div>
+                `;
+            }
+
+            renderModeSelector() {
+                return `
+                    <div class="bg-white rounded-lg shadow-md p-4 mb-6">
+                        <div class="flex items-center gap-2 mb-3">
+                            <span class="text-xl">⚙️</span>
+                            <span class="font-semibold text-gray-700">Energy Mode:</span>
+                        </div>
+                        <div class="flex gap-2">
+                            <button data-action="setMode" data-mode="auto" 
+                                class="flex-1 py-2 px-4 rounded-lg font-medium transition ${this.mode === 'auto' ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}">
+                                Full Auto
+                            </button>
+                            <button data-action="setMode" data-mode="assist" 
+                                class="flex-1 py-2 px-4 rounded-lg font-medium transition ${this.mode === 'assist' ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}">
+                                Assist Mode
+                            </button>
+                            <button data-action="toggleStats" 
+                                class="py-2 px-4 rounded-lg bg-blue-100 text-blue-700 hover:bg-blue-200 transition">
+                                📊 Stats
+                            </button>
+                        </div>
+                    </div>
+                `;
+            }
+
+            renderStats() {
+                return `
+                    <div class="bg-white rounded-lg shadow-md p-6 mb-6 animate-fade-in">
+                        <h2 class="text-xl font-bold text-gray-800 mb-4">Your Decision Stats</h2>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            ${this.state.map(decision => {
+                                const stats = this.getStats(decision);
+                                return `
+                                    <div class="bg-gray-50 rounded-lg p-4">
+                                        <h3 class="font-semibold text-gray-700 mb-2">${decision.icon} ${decision.category}</h3>
+                                        <div class="text-sm text-gray-600">
+                                            <p>Total decisions: ${stats.total}</p>
+                                            <p>Satisfaction: ${stats.satisfaction}%</p>
+                                            <p>Liked: ${stats.liked} decisions</p>
+                                        </div>
+                                    </div>
+                                `;
+                            }).join('')}
+                        </div>
+                    </div>
+                `;
+            }
+
+            renderCurrentDecision() {
+                return `
+                    <div class="bg-white rounded-lg shadow-lg p-8 mb-6 border-2 border-purple-200 animate-fade-in">
+                        <div class="text-center mb-6">
+                            <p class="text-gray-600 mb-2">For ${this.currentDecision.category}:</p>
+                            <h2 class="text-3xl font-bold text-purple-600 mb-3">
+                                ${this.currentDecision.suggestion}
+                            </h2>
+                            <p class="text-gray-500 italic">
+                                Why? ${this.currentDecision.reasoning}
+                            </p>
+                        </div>
+                        
+                        <div class="flex gap-4 justify-center">
+                            <button data-action="feedback" data-liked="true" 
+                                class="flex items-center gap-2 bg-green-500 hover:bg-green-600 text-white px-6 py-3 rounded-lg font-medium transition">
+                                👍 Love it!
+                            </button>
+                            <button data-action="feedback" data-liked="false" 
+                                class="flex items-center gap-2 bg-red-500 hover:bg-red-600 text-white px-6 py-3 rounded-lg font-medium transition">
+                                👎 Not today
+                            </button>
+                        </div>
+                    </div>
+                `;
+            }
+
+            renderCategories() {
+                return `
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        ${this.state.map(decision => {
+                            const stats = this.getStats(decision);
+                            return `
+                                <div class="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition">
+                                    <div class="text-4xl mb-3">${decision.icon}</div>
+                                    <h3 class="text-xl font-bold text-gray-800 mb-2">
+                                        ${decision.category}
+                                    </h3>
+                                    <p class="text-sm text-gray-500 mb-4">
+                                        ${stats.total} decisions • ${stats.satisfaction}% satisfaction
+                                    </p>
+                                    <button data-action="decide" data-id="${decision.id}" 
+                                        class="w-full bg-purple-600 hover:bg-purple-700 text-white py-2 px-4 rounded-lg font-medium transition">
+                                        ✨ Decide for Me
+                                    </button>
+                                </div>
+                            `;
+                        }).join('')}
+                    </div>
+                `;
+            }
+
+            renderFooter() {
+                return `
+                    <div class="mt-8 text-center text-gray-500 text-sm">
+                        <p>The app learns from your feedback to make better suggestions over time.</p>
+                        <p class="mt-1">Your decisions are stored locally in your browser.</p>
+                    </div>
+                `;
+            }
+
+            attachEventListeners() {
+                document.querySelectorAll('[data-action]').forEach(btn => {
+                    btn.addEventListener('click', (e) => {
+                        const action = e.currentTarget.dataset.action;
+                        
+                        if (action === 'decide') {
+                            this.makeDecision(e.currentTarget.dataset.id);
+                        } else if (action === 'feedback') {
+                            this.provideFeedback(e.currentTarget.dataset.liked === 'true');
+                        } else if (action === 'toggleStats') {
+                            this.showStats = !this.showStats;
+                            this.render();
+                        } else if (action === 'setMode') {
+                            this.mode = e.currentTarget.dataset.mode;
+                            this.render();
+                        }
+                    });
+                });
+            }
+
+            init() {
+                this.render();
+            }
+        }
+
+        // Initialize app
+        new DecisionFatigueHelper();
+    </script>
+</body>
+</html>
